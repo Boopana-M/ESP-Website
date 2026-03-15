@@ -752,11 +752,11 @@ class SchedulingCheckRunner:
 
     def _trace_dependency_chains(self, start_moderator, first_dependency, dependency_graph):
         """Trace all dependency branches from one starting dependency edge."""
-        stack = [(start_moderator, [start_moderator, first_dependency])]
+        stack = [[start_moderator, first_dependency]]
         chains = []
 
         while stack:
-            _, chain = stack.pop()
+            chain = stack.pop()
             current = chain[-1]
             next_candidates = sorted(
                 dependency_graph.get(current, set()),
@@ -767,21 +767,14 @@ class SchedulingCheckRunner:
                 chains.append((chain, False))
                 continue
 
-            extended = False
             for candidate in next_candidates:
                 if candidate == start_moderator:
                     chains.append((chain + [start_moderator], True))
-                    extended = True
                 elif candidate not in chain:
-                    stack.append((start_moderator, chain + [candidate]))
-                    extended = True
+                    stack.append(chain + [candidate])
                 else:
                     # Internal cycle not returning to the start moderator.
                     chains.append((chain + [candidate], False))
-                    extended = True
-
-            if not extended:
-                chains.append((chain, False))
 
         # Deduplicate equivalent chain signatures.
         deduped = []
