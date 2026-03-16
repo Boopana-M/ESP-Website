@@ -711,11 +711,21 @@ class SchedulingCheckRunner:
     def _consecutive_timeslot_pairs(self):
         pairs = []
         timeslots = sorted(self.p.getTimeSlotList(), key=lambda ts: ts.start)
-        for i in range(len(timeslots) - 1):
-            current_slot = timeslots[i]
-            next_slot = timeslots[i + 1]
-            if current_slot.start.date() == next_slot.start.date():
-                pairs.append((current_slot, next_slot))
+
+        # Keep dependencies within contiguous groups to avoid linking across
+        # large scheduling gaps.
+        contiguous_tolerance_tag = Tag.getProgramTag('timeblock_contiguous_tolerance', program=self.p)
+        try:
+            contiguous_tolerance = int(contiguous_tolerance_tag) if contiguous_tolerance_tag is not None else 5
+        except (TypeError, ValueError):
+            contiguous_tolerance = 5
+
+        for group in Event.group_contiguous(timeslots, tol=contiguous_tolerance):
+            for i in range(len(group) - 1):
+                current_slot = group[i]
+                next_slot = group[i + 1]
+                if current_slot.start.date() == next_slot.start.date():
+                    pairs.append((current_slot, next_slot))
         return pairs
 
     def _moderator_room_assignments(self):
@@ -814,11 +824,7 @@ class SchedulingCheckRunner:
                         continue
                     dependency_graph[moderator].add(replacement)
 
-            reported_starts = set()
             for moderator in sorted(dependency_graph.keys(), key=lambda user: user.username):
-                if moderator in reported_starts:
-                    continue
-
                 for first_dependency in sorted(dependency_graph[moderator], key=lambda user: user.username):
                     chains = self._trace_dependency_chains(moderator, first_dependency, dependency_graph)
                     for chain, has_loop in chains:
@@ -833,8 +839,6 @@ class SchedulingCheckRunner:
                             "Severity": self._dependency_severity(dependency_count, has_loop),
                             "Loop": "Yes" if has_loop else "No",
                         })
-
-                reported_starts.add(moderator)
 
         return self.formatter.format_table(
             output_rows,

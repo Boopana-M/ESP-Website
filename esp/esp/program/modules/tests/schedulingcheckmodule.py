@@ -26,7 +26,7 @@ class SchedulingCheckModuleTest(ProgramFrameworkTest):
         kwargs.update({
             'num_timeslots': 2,
             'num_rooms': 3,
-            'num_teachers': 5,
+            'num_teachers': 6,
             'classes_per_teacher': 1,
             'sections_per_class': 1,
         })
@@ -130,3 +130,73 @@ class SchedulingCheckModuleTest(ProgramFrameworkTest):
         self.assertTrue(any(chain.startswith('%s -> %s' % (moderator_a.username, moderator_b.username)) for chain in chains))
         self.assertTrue(any(chain.startswith('%s -> %s -> %s' % (moderator_a.username, moderator_c.username, moderator_a.username))
                             for chain in chains))
+
+    def test_moderator_dependency_chain_length_three_without_loop_is_reported(self):
+        sections = list(self.program.sections().order_by('id')[:5])
+        self.assertEqual(len(sections), 5)
+
+        moderator_a = self.teachers[0]
+        moderator_b = self.teachers[1]
+        moderator_c = self.teachers[2]
+        slot_0 = self.timeslots[0]
+        slot_1 = self.timeslots[1]
+
+        # Block 0 assignments.
+        self._schedule_section(sections[0], slot_0, 'Room 0', [moderator_a])
+        self._schedule_section(sections[1], slot_0, 'Room 1', [moderator_b])
+        self._schedule_section(sections[2], slot_0, 'Room 2', [moderator_c])
+
+        # Block 1 assignments:
+        # - A moves to Room 1 and depends on B (who moves into Room 0)
+        # - B depends on both A and C at Room 1, so the longer non-loop chain
+        #   A -> B -> C should be present in the output.
+        self._schedule_section(sections[3], slot_1, 'Room 0', [moderator_b])
+        self._schedule_section(sections[4], slot_1, 'Room 1', [moderator_a, moderator_c])
+
+        runner = SchedulingCheckRunner(self.program, formatter=RawSCFormatter())
+        results = runner.moderator_movement_dependency_loops()
+
+        target_prefix = '%s -> %s -> %s' % (moderator_a.username, moderator_b.username, moderator_c.username)
+        matching_rows = [
+            row for row in results
+            if row['Loop'] == 'No' and row['Dependency Chain'].startswith(target_prefix)
+        ]
+        self.assertTrue(matching_rows)
+        self.assertTrue(all(row['Severity'] == 'Medium' for row in matching_rows))
+
+    def test_moderator_dependency_loop_length_three_is_reported(self):
+        sections = list(self.program.sections().order_by('id')[:6])
+        self.assertEqual(len(sections), 6)
+
+        moderator_a = self.teachers[0]
+        moderator_b = self.teachers[1]
+        moderator_c = self.teachers[2]
+        slot_0 = self.timeslots[0]
+        slot_1 = self.timeslots[1]
+
+        # Block 0 assignments.
+        self._schedule_section(sections[0], slot_0, 'Room 0', [moderator_a])
+        self._schedule_section(sections[1], slot_0, 'Room 1', [moderator_b])
+        self._schedule_section(sections[2], slot_0, 'Room 2', [moderator_c])
+
+        # Block 1 assignments create a 3-person cycle:
+        # A(R0)->B, B(R1)->C, C(R2)->A
+        self._schedule_section(sections[3], slot_1, 'Room 2', [moderator_a])
+        self._schedule_section(sections[4], slot_1, 'Room 0', [moderator_b])
+        self._schedule_section(sections[5], slot_1, 'Room 1', [moderator_c])
+
+        runner = SchedulingCheckRunner(self.program, formatter=RawSCFormatter())
+        results = runner.moderator_movement_dependency_loops()
+
+        target_prefix = '%s -> %s -> %s -> %s' % (
+            moderator_a.username,
+            moderator_b.username,
+            moderator_c.username,
+            moderator_a.username,
+        )
+        matching_rows = [
+            row for row in results
+            if row['Loop'] == 'Yes' and row['Dependency Chain'].startswith(target_prefix)
+        ]
+        self.assertTrue(matching_rows)
+        self.assertTrue(all(row['Severity'] == 'High' for row in matching_rows))
